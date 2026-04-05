@@ -1,0 +1,90 @@
+version: "3.8"
+
+services:
+
+  # ──────────────────────────────────────────
+  # PostgreSQL Database
+  # ──────────────────────────────────────────
+  postgres:
+    image: postgres:15.6
+    container_name: employee_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sparkuser
+      POSTGRES_PASSWORD: sparkpass
+      POSTGRES_DB: employeedb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - spark_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sparkuser -d employeedb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────
+  # Spark Master
+  # ──────────────────────────────────────────
+  spark-master:
+    image: apache/spark:4.0.2-python3
+    container_name: spark_master
+    user: root
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    command: >
+      bash -c "/opt/spark/bin/spark-class
+      org.apache.spark.deploy.master.Master
+      --host spark-master
+      --port 7077
+      --webui-port 8080"
+    ports:
+      - "8080:8080"               # Spark Web UI
+      - "7077:7077"               # Spark master port
+    volumes:
+      - ./scripts:/opt/scripts
+      - ./data:/opt/data
+      - ./jars:/opt/spark/jars/extra
+    networks:
+      - spark_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ──────────────────────────────────────────
+  # Spark Worker
+  # ──────────────────────────────────────────
+  spark-worker:
+    image: apache/spark:4.0.2-python3
+    container_name: spark_worker
+    user: root
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    command: >
+      bash -c "/opt/spark/bin/spark-class
+      org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
+      --webui-port 8081"
+    ports:
+      - "8081:8081"               # Worker Web UI
+    volumes:
+      - ./scripts:/opt/scripts
+      - ./data:/opt/data
+      - ./jars:/opt/spark/jars/extra
+    networks:
+      - spark_net
+    depends_on:
+      - spark-master
+
+# ──────────────────────────────────────────
+# Shared Network & Volumes
+# ──────────────────────────────────────────
+networks:
+  spark_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
